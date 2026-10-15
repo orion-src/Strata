@@ -195,6 +195,7 @@ function render(m) {
   if (live.queued > 0) setPill("queued", `${live.queued} queued`);
   if (tab === "monitor") renderMonitor(live, hw, st, eng, h, last, m.requests || [], m.totals, m.requests_kept);
   if (tab === "monitor") renderConvCache(m.conversation_cache);
+  if (tab === "monitor") renderParallel(live);
   if (tab === "about") renderAbout(eng, hw, st);
 }
 
@@ -229,6 +230,54 @@ function renderConvCache(c) {
   $("cc-note").textContent = c.enabled
     ? "A request that continues a parked conversation gets its state back instead of reading it again; the oldest goes when the slots or the memory are full."
     : "The engine keeps the last conversation's state, so a follow-up reads only what is new. To keep several conversations (agents taking turns), add \"--conversation-cache-mib\", \"8192\" to the run config's args (docs/DETAILS.md).";
+}
+
+// #465 slots, rendered: the server reports each batch slot in /metrics (slots_view); one Model-state-style card per slot,
+// so several agents sharing the model can each be seen reading, generating, or holding a parked conversation
+let pslotsStamp = "";
+function renderParallel(live) {
+  const wrap = $("pslots-wrap"), slots = live.slots || [];
+  $("state-card").hidden = slots.length > 0;   // the per-slot replicas replace the aggregate card
+  wrap.hidden = !slots.length;
+  if (!slots.length) return;
+  const extra = [];
+  if (live.outside_slots) extra.push(`${fmt(live.outside_slots)} not in a slot`);
+  if (live.waiting) extra.push(`${fmt(live.waiting)} waiting`);
+  if (live.admitting) extra.push(`${fmt(live.admitting)} admitting`);
+  const sum = `${fmt(live.running || 0)} running / ${fmt(live.parallel || slots.length)} slots` +
+    `${live.queued ? ` · ${fmt(live.queued)} queued` : ""}${extra.length ? ` · ${extra.join(" · ")}` : ""}`;
+  // #465: a request ALONE on a batch engine takes the solo path, not a slot; show it on the first card so
+  // one-thread-at-a-time activity is never invisible.  Two or more running land in slots 0, 1, ... as usual.
+  const solo = !slots.some((s) => s.state !== "idle") && (live.state === "reading" || live.state === "generating");
+  const view = solo
+    ? slots.map((s, i) => i ? s : {slot: 0, state: live.state === "generating" ? "decoding" : "reading",
+        prompt_tokens: live.prompt_total || live.prompt_tokens, prompt_read: live.prompt_read,
+        prompt_total: live.prompt_total,
+        generated: live.generated, tok_s: live.tok_s, max_tokens: live.max_tokens})
+    : slots;
+  const stamp = JSON.stringify([sum, solo ? live.state : "", view]);
+  if (stamp === pslotsStamp) return;
+  pslotsStamp = stamp;
+  $("pslots-sum").textContent = sum;
+  // exact replicas of the Model state card, one per batch slot; a slot decoding is that card's "generating"
+  const badge = (st, k) => `<span class="st-badge${k !== "idle" ? ` st-badge--${k}` : ""}${st === k ? " on" : ""}">${k[0].toUpperCase() + k.slice(1)}</span>`;
+  $("pslots-strip").innerHTML = view.map((x) => {
+    const st = x.state === "decoding" ? "generating" : x.state;
+    let label = "Waiting for a request", detail = "", tone = "", pct = 0;
+    if (x.state === "reading") {
+      label = "Reading prompt"; tone = ' data-tone="info"';
+      detail = x.prompt_read != null && x.prompt_total ? `${fmt(x.prompt_read)} / ${fmt(x.prompt_total)} tokens · ${fmt(pct = Math.min(100, 100 * x.prompt_read / x.prompt_total))}%`
+                                                       : `${fmt(x.prompt_tokens)} tokens`;
+    } else if (x.state === "decoding") {
+      label = "Generating"; detail = `${fmt(x.generated)} tokens · ${fmt(x.tok_s, 1)} tok/s`;
+      if (x.max_tokens) pct = Math.min(100, 100 * x.generated / x.max_tokens);
+    } else detail = x.held_tokens ? `holding ${fmt(x.held_tokens)} tokens` : "empty";
+    // one slot: nothing to disambiguate, the title stays the plain "Model state" of the card it replaces
+    return `<div class="st-card state-card"><div class="state-card__head"><span class="card-title">Model state${view.length > 1 ? ` ${esc(x.slot)}` : ""}</span>` +
+      `<span class="badges">${badge(st, "idle")}${badge(st, "reading")}${badge(st, "generating")}${badge(st, "queued")}${badge(st, "error")}</span></div>` +
+      `<div class="state-card__row"><span>${esc(label)}</span><span class="muted">${esc(detail)}</span></div>` +
+      `<div class="st-progress"${tone}><div class="st-progress__bar" style="width:${pct}%"></div></div></div>`;
+  }).join("");
 }
 
 function renderTotals(t) {

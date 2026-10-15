@@ -256,6 +256,16 @@ class ConversationCacheCard(unittest.TestCase):
             self.assertIn(f'id="{el}"', html)
             self.assertIn(f'"{el}"', js)
 
+    def test_the_parallel_slot_cards_are_on_the_page(self):
+        # #465: the per-slot Model state replicas; ids pinned the same way as the cache card above
+        web = Path(__file__).parent / "web"
+        html, js = (web / "index.html").read_text(encoding="utf-8"), (web / "app.js").read_text(encoding="utf-8")
+        for el in ("state-card", "pslots-wrap", "pslots-sum", "pslots-strip"):
+            self.assertIn(f'id="{el}"', html)
+            self.assertIn(f'"{el}"', js)
+        # one reported slot keeps the plain "Model state" title; the number appears only with several slots
+        self.assertIn('Model state${view.length > 1 ? ` ${esc(x.slot)}` : ""}', js)
+
 
 if __name__ == "__main__":
     unittest.main()

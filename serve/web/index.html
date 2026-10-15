@@ -97,7 +97,7 @@
   <!-- ============================ Monitor ============================ -->
   <section class="view view--monitor" id="view-monitor" role="tabpanel" aria-labelledby="tab-btn-monitor" hidden>
     <div class="monitor">
-      <div class="st-card state-card">
+      <div class="st-card state-card" id="state-card">
         <div class="state-card__head">
           <span class="card-title">Model state</span>
           <span class="badges" id="state-badges">
@@ -110,6 +110,11 @@
         </div>
         <div class="state-card__row"><span id="state-label">Waiting for a request</span><span class="muted" id="state-detail"></span></div>
         <div class="st-progress" id="state-progress"><div class="st-progress__bar" id="state-bar" style="width:0%"></div></div>
+      </div>
+
+      <div id="pslots-wrap" hidden>
+        <div class="pslots-sum muted small" id="pslots-sum"></div>
+        <div class="pslots-strip" id="pslots-strip"></div>
       </div>
 
       <div class="metrics" id="metrics">

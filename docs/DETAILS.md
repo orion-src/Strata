@@ -1014,6 +1014,12 @@ slots and the RAM budget, how many were parked, restored and evicted, and the la
 log), and for every setup how many prompt tokens the cache gave back - in the last request and since the start.
 `/metrics` has the same under `"conversation_cache"`.
 
+When `parallel` is on (#465), the Monitor tab replaces its single **Model state** card with one identical
+card per batch slot - same badges, same status line, each showing what that slot is reading, generating,
+or holding while idle - plus a running/queued/waiting summary line. A lone request takes the solo path
+rather than a slot; it shows on the first card, so one-at-a-time activity is never invisible. With parallel
+off the single card is what it was. The data is the `"slots"` array `/metrics` already reports.
+
 Snapshots contain running state, checkpoints, used K/V pages, and draft-layer K/V.
 They add host RAM, not another model or VRAM allocation. The byte budget also counts
 an incoming snapshot during a switch. After a restore, unchanged K/V pages can be
