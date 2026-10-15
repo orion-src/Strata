@@ -196,6 +196,14 @@ class Engine(unittest.TestCase):
         self.assertEqual(len(apple_keys), len(set(apple_keys)))   # vendor + common options, no duplicates
         self.assertEqual(engine_options.CATALOG["env.STRATA_WMMA_GEMM"]["vendor"], "amd")   # STRATA_USE_HIP guard
         self.assertNotIn("env.STRATA_WMMA_GEMM", {o["key"] for o in engine_options.catalog("nvidia")})
+        # an option whose gate names one vendor is scoped to that vendor: no other vendor's list shows it
+        scoped = {"env.STRATA_KV_HOST_DMA": "amd", "env.STRATA_GFX1151_DEFAULTS": "amd", "env.STRATA_GFX12_DEFAULTS": "amd",
+                  "env.STRATA_EXPERT_V2": "amd", "env.STRATA_QFUSE_HC": "amd", "env.STRATA_PREFILL_CPU_SHARE": "nvidia",
+                  "env.STRATA_QSA_CLUSTER": "nvidia", "env.STRATA_MTP_PRIORITY": "nvidia"}
+        for key, v in scoped.items():
+            self.assertEqual(engine_options.CATALOG[key]["vendor"], v, key)
+            for other in ("amd", "nvidia", "intel", "apple"):
+                self.assertEqual(key in {o["key"] for o in engine_options.catalog(other)}, other == v, (key, other))
 
     def test_vendor_and_arch(self):
         self.assertEqual(engine_options.detect_vendor({"backend": "hip"}), "amd")
