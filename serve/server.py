@@ -2600,7 +2600,16 @@ def engine_args(cfg: dict) -> list[str]:
         if isinstance(seg, int) and not isinstance(seg, bool) and seg > 0 and "--vram-segment-mib" not in args:
             args += ["--vram-segment-mib", str(seg)]
     args += parallel_args(cfg, args)
-    return learned_profile_args(cfg, args)
+    args = learned_profile_args(cfg, args)
+    # opt-in: "user_args": [...] in the run config - engine options of the user's own that setup does not manage
+    # (the conversation cache, for example).  setup writes the key with --user-args and carry_over keeps it across
+    # setup runs; appended last, so the engine's parser sees the user's choice after anything setup chose.
+    extra = cfg.get("user_args")
+    if isinstance(extra, list):
+        args += [a for a in extra if isinstance(a, str) and a.strip()]
+    elif extra is not None:
+        print('[strata] "user_args" must be a list of engine options (strings): ignored', flush=True)
+    return args
 
 
 PARALLEL_MAX = 8      # the engine's batch window holds at most 8 rows (kVerifyMaxT); --batch-mtp waves more through it

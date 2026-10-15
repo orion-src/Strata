@@ -48,6 +48,7 @@ import os
 import platform
 import re
 import shutil
+import shlex
 import struct
 import subprocess
 import sys
@@ -4482,11 +4483,22 @@ def carry_profile_args(old: dict, cfg: dict) -> list[str]:
     return kept
 
 
+def user_args_list(s: str) -> list[str]:
+    """--user-args: one quoted string -> the list stored in the config's "user_args" (the server appends it to the
+    engine arguments; carry_over keeps the key across setup runs).  posix=False: Windows paths keep their
+    backslashes (posix mode silently eats them); a path quoted inside the string keeps its spaces."""
+    try:
+        return [t.strip('"') for t in shlex.split(s, posix=False)]
+    except ValueError as e:
+        sys.exit(f"setup: --user-args {s!r} cannot be parsed ({e})")
+
+
 def args_dropped(old: dict, cfg: dict) -> list[str]:
     """#629: the engine options of the earlier run config that the new one has no more (by flag name): options added
     by hand, which a setup run does not carry over - the start of the line that names them."""
     def flags(c):
-        a = c.get("args") if isinstance(c.get("args"), list) else []
+        a = (c.get("args") if isinstance(c.get("args"), list) else []) + \
+            (c.get("user_args") if isinstance(c.get("user_args"), list) else [])   # a hand flag moved to user_args is not dropped
         return [str(x) for x in a if str(x).startswith("--")]
     new = set(flags(cfg))
     return list(dict.fromkeys(f for f in flags(old) if f not in new))
@@ -4524,6 +4536,7 @@ def write_setup_config(cfg_path: Path, cfg: dict, source: Path | None = None) ->
         dropped = args_dropped(old, cfg) if old is not None else []
         say(f"  the earlier run config is kept as {bak.name}" + (
             f"; engine options it had that this one has not (setup chooses those): {' '.join(dropped)}"
+            ' - to keep options of your own through setup runs: setup --user-args "..." (the config\'s "user_args")'
             if dropped else ""))
 
 
@@ -5810,6 +5823,11 @@ def main() -> int:
     ap.add_argument("--parallel", type=int, metavar="N",
                     help="up to N requests decode together (batch slots, opt-in; default: one at a time, the others "
                          "wait). Each slot takes VRAM from the expert cache; setup says what it recommends")
+    ap.add_argument("--user-args", metavar="ARGS",
+                    help="engine options of your own that setup keeps in the run config (opt-in): one quoted string, "
+                         'e.g. "--conversation-cache-mib 8192 --conversation-cache-slots 4"; stored as the config\'s '
+                         '"user_args" and appended to the engine arguments at every start, so they survive later setup '
+                         'runs (like "parallel"); --user-args "" removes them')
     ap.add_argument("--replicas", type=int, metavar="N",
                     help="several GPUs: run N independent engines, each on its own equal group of the chosen cards (2 "
                          "replicas on 4 cards = two 2-card engines), requests spread over them (opt-in; more total "
@@ -6786,6 +6804,13 @@ def main() -> int:
         else:
             cfg["parallel"] = 1
             ok("parallel requests: one at a time (--parallel 1)")
+    if a.user_args is not None:                       # written only when given (else an earlier "user_args" carries over)
+        cfg["user_args"] = user_args_list(a.user_args)
+        if cfg["user_args"]:
+            ok('your own engine options: "user_args": ' + " ".join(cfg["user_args"]) +
+               " (appended at every start; kept by later setup runs)")
+        else:
+            ok('your own engine options: removed ("user_args" empty)')
     if vision != "none":
         old_cfg = ROOT / f"strata-{tag.lower()}.json"
         vt = vision_tokens(a.vision_tokens, vision, old_cfg if old_cfg.is_file() else adopted)

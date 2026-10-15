@@ -996,7 +996,11 @@ without it. The engine's own key is `pin=N` on the `GEN` line.
 
 **Multiple conversations (opt-in).** Add `--conversation-cache-mib 8192
 --conversation-cache-slots 4` to the engine arguments to park up to four conversations
-in a bounded 8 GiB host-RAM cache. This preserves controller/worker histories when
+in a bounded 8 GiB host-RAM cache. To have setup keep such options of your own through
+later setup runs, write them as `--user-args "--conversation-cache-mib 8192
+--conversation-cache-slots 4"`: setup stores them in the config's `"user_args"` and the
+server appends them to the engine arguments at every start (hand-added `"args"` entries
+are setup's to choose, `"user_args"` are yours). This preserves controller/worker histories when
 their requests alternate; it does not execute requests concurrently. No client session
 ID is required: only exact token/image prefixes with matching steering mode are reused.
 The default budget is 0 (disabled); `--prompt-cache 0` also disables parking.
