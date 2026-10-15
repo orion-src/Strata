@@ -528,23 +528,29 @@ class Restart(unittest.TestCase):
         self.assertEqual(self.svc.engine.spawn[4]["STRATA_METAL_ARENA_GB"], "64")
         self.assertFalse(self.svc.restart_pending(new))
 
-    def test_restart_waits_for_the_fifo_and_swaps_the_spawn_atomically(self):
-        # a request-driven load takes self.fifo: the restart must not unload + install the new spawn in its gap
+    def test_restart_with_the_fifo_held_answers_busy_at_once(self):
+        # a generation (or a load in progress) holds self.fifo for its turn: the restart answers busy without
+        # waiting for it, and does not unload or install the new spawn in the gap (as unload() does)
         new, _ = runconfig.apply(CFG, {"env.STRATA_ATTN_PRE75": "1"})
         self.path.write_text(json.dumps(new, indent=1), encoding="utf-8")
         self.svc.engine.unloaded = False
         old_spawn = self.svc.engine.spawn
-        self.svc.fifo.acquire()                                        # a load is in progress
+        self.svc.fifo.acquire()                                        # the turn is taken
         self.result = None
         worker = threading.Thread(target=lambda: setattr(self, "result", self.svc.apply_config_and_restart()))
-        worker.start()
-        time.sleep(0.3)
-        self.assertTrue(worker.is_alive())                             # blocked on the fifo: nothing touched
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                worker.start()
+                worker.join(5)                                         # must not block on the turn
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(self.result, "busy")
+        finally:
+            self.svc.fifo.release()
+        self.assertEqual(self.svc.engine.restarts, 0)
+        self.assertFalse(self.svc.engine.unloaded)                     # nothing was stopped
         self.assertEqual(self.svc.engine.spawn, old_spawn)
-        self.svc.fifo.release()
-        worker.join(10)
-        self.assertFalse(worker.is_alive())
-        self.assertEqual(self.result, "restarting")
+        with contextlib.redirect_stdout(io.StringIO()):                # the turn is free: the restart goes ahead
+            self.assertEqual(self.svc.apply_config_and_restart(), "restarting")
         self.assertEqual(self.svc.engine.spawn[4]["STRATA_ATTN_PRE75"], "1")   # the new spawn, installed atomically
 
     def test_busy_changes_nothing(self):

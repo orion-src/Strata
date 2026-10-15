@@ -3537,18 +3537,23 @@ class Service:
 
     def apply_config_and_restart(self) -> str:
         """The Engine tab's restart: unload, respawn the engine from the run config as it is now, load.
-        "busy" (a request is running: nothing is stopped), "unsupported" (a mock engine, a replica group),
-        "restarting" when the new engine is on its way (the thread loads it; /health shows when it is back).
+        "busy" (a request is running, or a load holds the turn: nothing is stopped and the call does not wait),
+        "unsupported" (a mock engine, a replica group), "restarting" when the new engine is on its way (the thread
+        loads it; /health shows when it is back).
         The replacement spawn is built first and the unload + install runs while holding self.fifo: load() takes
-        that lock to start the engine, so no request can reload the old spawn in the gap (and unload() takes the
-        same non-reentrant lock itself, so its work is done inline here, not by calling it under the lock)."""
+        that lock to start the engine, so no request can reload the old spawn in the gap. The lock is taken without
+        waiting, as unload() takes it: a generation holds it for its whole turn, so a blocking acquire here would
+        sit behind the request and only then restart the engine under it. (unload() takes the same non-reentrant
+        lock itself, so its work is done inline here, not by calling it under the lock.)"""
         if not self.config_path:
             raise OSError("this server was started without a run config")
         cfg = runconfig.load(self.config_path)
         if not self.restart_supported():
             return "unsupported"
         want = self._spawn_from(cfg)
-        with self.fifo:
+        if not self.fifo.acquire(blocking=False):
+            return "busy"
+        try:
             if self.engine.alive():
                 with self.status_lock:
                     if self.status.get("busy") or self.status.get("queued"):
@@ -3564,6 +3569,8 @@ class Service:
             except ValueError:
                 pass
             self.backend = cfg.get("backend")
+        finally:
+            self.fifo.release()
         threading.Thread(target=self._load_after_restart, name="strata-restart", daemon=True).start()
         return "restarting"
 
