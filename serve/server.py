@@ -46,6 +46,7 @@ import sys
 import tempfile
 import threading
 import time
+import unicodedata
 import urllib.request
 import uuid
 from http.client import HTTPException
@@ -733,6 +734,21 @@ EOS_IDS = {248044, 248046}   # <|endoftext|>, <|im_end|>: the engine's default -
 # finished, #267): the process may stay alive and even print DONE, but it must not take another request.
 FATAL_PREFIXES = ("ERR verify: timed out at layer ", "ERR verify batch: timed out at layer ",
                   "ERR verify: an earlier window never finished", "ERR verify batch: an earlier window never finished")
+
+# A client's own name for its request, shown on the Monitor's slot cards (#465 slots): the OpenAI body's `user`
+# field (chat-completions and responses send it) or an `X-Client-Label` header (any route, incl. /v1/messages).
+# It arrives from a client and is shown and logged, so it is sanitized first: one line, no control characters.
+CLIENT_LABEL_MAX = 64
+
+
+def sanitize_client_label(raw) -> str | None:
+    """The label as it may be shown: control characters become spaces, runs of whitespace collapse, the line is
+    capped at CLIENT_LABEL_MAX characters.  None when nothing is left, or when it was never a string."""
+    if not isinstance(raw, str):
+        return None
+    s = "".join(ch if not unicodedata.category(ch).startswith("C") else " " for ch in raw)
+    s = " ".join(s.split())[:CLIENT_LABEL_MAX].strip()
+    return s or None
 
 
 class StrataEngine:
@@ -1628,6 +1644,10 @@ class StrataEngine:
                     head = f"BGENI {slot} {left}{keys} {embeddings}" if embeddings else f"BGEN {slot} {left}{keys}"
                     live = {"slot": slot, "state": "reading", "prompt_tokens": len(prompt), "generated": 0,
                             "started": time.time(), "first_token": None}
+                    lab = sanitize_client_label((sampling or {}).get("strata_client_label")
+                                                or (sampling or {}).get("user"))
+                    if lab:                               # the client named this request: the Monitor shows it
+                        live["label"] = lab
                     self.slot_live[slot] = live
                     self._last_done = None                  # (#879: this admission's DONE decides below)
                     self._send(f"{head} {','.join(str(int(t)) for t in prompt)}")
@@ -1846,9 +1866,12 @@ class StrataEngine:
                 view.append({"slot": b, "state": "idle", "held_tokens": len(self.slot_held[b])})
                 continue
             ft = r.get("first_token")
-            view.append({"slot": b, "state": r["state"], "prompt_tokens": r["prompt_tokens"],
-                         "generated": r["generated"], "elapsed_s": round(now - r["started"], 1),
-                         "tok_s": round(r["generated"] / max(1e-6, now - ft), 1) if ft else None})
+            d = {"slot": b, "state": r["state"], "prompt_tokens": r["prompt_tokens"],
+                 "generated": r["generated"], "elapsed_s": round(now - r["started"], 1),
+                 "tok_s": round(r["generated"] / max(1e-6, now - ft), 1) if ft else None}
+            if r.get("label"):                            # the client's own name for the request, when it sent one
+                d["label"] = r["label"]
+            view.append(d)
         return view
 
     def generate(self, ids, max_new, sampling, cancel, embeddings=None):
@@ -5504,6 +5527,11 @@ def make_handler(svc: Service):
                     return
                 if path in ("/v1/chat/completions", "/v1/messages", "/v1/responses"):
                     self.record = svc.begin_request(path, req)
+                    lab = sanitize_client_label(self.headers.get("X-Client-Label"))
+                    if lab:
+                        # the request dict is the sampling dict all the way to the engine (see _run), so the
+                        # header's label reaches the slot view there; the body's own `user` needs no carrying
+                        req["strata_client_label"] = lab
                 if path == "/v1/responses":
                     self._responses(req)
                 elif path.startswith("/slots/"):

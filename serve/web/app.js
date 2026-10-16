@@ -273,7 +273,7 @@ function renderParallel(live) {
       if (x.max_tokens) pct = Math.min(100, 100 * x.generated / x.max_tokens);
     } else detail = x.held_tokens ? `holding ${fmt(x.held_tokens)} tokens` : "empty";
     // one slot: nothing to disambiguate, the title stays the plain "Model state" of the card it replaces
-    return `<div class="st-card state-card"><div class="state-card__head"><span class="card-title">Model state${view.length > 1 ? ` ${esc(x.slot)}` : ""}</span>` +
+    return `<div class="st-card state-card"><div class="state-card__head"><span class="card-title" dir="ltr">Model state${view.length > 1 ? ` ${esc(x.slot)}` : ""}${x.label ? ` - ${esc(x.label)}` : ""}</span>` +
       `<span class="badges">${badge(st, "idle")}${badge(st, "reading")}${badge(st, "generating")}${badge(st, "queued")}${badge(st, "error")}</span></div>` +
       `<div class="state-card__row"><span>${esc(label)}</span><span class="muted">${esc(detail)}</span></div>` +
       `<div class="st-progress"${tone}><div class="st-progress__bar" style="width:${pct}%"></div></div></div>`;

@@ -1018,7 +1018,10 @@ When `parallel` is on (#465), the Monitor tab replaces its single **Model state*
 card per batch slot - same badges, same status line, each showing what that slot is reading, generating,
 or holding while idle - plus a running/queued/waiting summary line. A lone request takes the solo path
 rather than a slot; it shows on the first card, so one-at-a-time activity is never invisible. With parallel
-off the single card is what it was. The data is the `"slots"` array `/metrics` already reports.
+off the single card is what it was. The data is the `"slots"` array `/metrics` already reports. A busy slot's
+card also names the client when its request carried a label - the body's `user` field or an `X-Client-Label`
+header (ASCII; HTTP headers are not UTF-8), sanitized to one 64-character line - so it reads
+`Model state 0 - hermes-sub`.
 
 Snapshots contain running state, checkpoints, used K/V pages, and draft-layer K/V.
 They add host RAM, not another model or VRAM allocation. The byte budget also counts
