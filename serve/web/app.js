@@ -494,22 +494,62 @@ $("cfg-save").addEventListener("click", async () => {
   }
 });
 
-// ------------------------------------------------------------------ Engine switches (GET /engine-options, POST /config)
-// GPU speed/feature switches for this vendor (the server's catalog: serve/engine_options.py), read from and
-// written to the run config's env block / args list. Only cataloged keys are accepted; next start applies.
+// ------------------------------------------------------------------ Engine tab (GET /engine-options + GET /config, POST /config)
+// Simple settings first: everyday knobs in plain words (the server's SIMPLE list, GET /config's "simple"),
+// then the full GPU switch catalog for this vendor (serve/engine_options.py) under "All switches (advanced)".
+// Both write the run config's env block / args list through POST /config; only known keys are accepted.
 let engOpts = [];
 let engDraft = {};                       // key -> edited value (survives re-renders by the search/experimental filter)
+let engSimple = [];
+let engSimpleDraft = {};                 // key -> edited value of a Simple settings row
 async function loadEngine() {
   let r;
   try { r = await fetch("engine-options", {headers: headers()}); } catch (e) { return; }
   if (!r.ok) { $("tab-btn-engine").hidden = true; return; }   // no run config, or an older server
   const d = await r.json();
+  let c = {};                                                  // the Simple settings come with GET /config
+  try { const cr = await fetch("config", {headers: headers()}); if (cr.ok) c = await cr.json(); } catch (e) {}
   engOpts = d.options || [];
+  engSimple = c.simple || [];
   engDraft = {};                                              // the saved values are the baseline again
+  engSimpleDraft = {};
   const scope = d.vendor === "all" ? "all GPUs" : d.vendor;
   $("eng-scope").textContent = [scope + (d.arch ? " · " + d.arch : ""), d.file].filter(Boolean).join(" · ");
   $("eng-restart-bar").hidden = !(d.restart_supported && d.restart_pending);
   renderEngine();
+}
+function simpleNorm(s, v) {                                   // the value POST /config would get
+  if (s.kind === "checkbox") return v === true;               // a checkbox is always on or off (never "default")
+  if (v === null || v === undefined || v === "") return null;
+  if (s.kind === "select") return (s.choices || []).some((x) => typeof x === "number") ? Number(v) : String(v);
+  return Number(v);                                           // number
+}
+function renderSimple() {
+  $("eng-simple").innerHTML = engSimple.map((s, i) => {
+    const cur = s.key in engSimpleDraft ? engSimpleDraft[s.key] : s.value;
+    let input;
+    if (s.kind === "select") {
+      const curS = cur == null ? "" : String(cur);
+      const opts = (s.choices || []).map((x) => [String(x), String(x)]);
+      if (curS !== "" && !opts.some(([v]) => v === curS)) opts.unshift([curS, curS]);   // a hand-set value stays visible
+      input = `<select class="st-input" id="sim-${i}"><option value=""${curS === "" ? " selected" : ""}>default</option>` +
+        opts.map(([val, text]) => `<option value="${esc(val)}"${curS === val ? " selected" : ""}>${esc(text)}</option>`).join("") +
+        "</select>";
+    } else if (s.kind === "checkbox") {
+      input = `<input type="checkbox" id="sim-${i}"${cur === true ? " checked" : ""}>`;
+    } else {
+      input = `<input class="st-input" id="sim-${i}" type="number" step="any" min="0" ` +
+        `value="${esc(cur == null ? "" : String(cur))}" placeholder="default" autocomplete="off">`;
+    }
+    return `<div class="eng-row"><label for="sim-${i}">${esc(s.label)}` +
+      `<span class="eng-desc">${esc(s.desc || "")}</span></label>${input}</div>`;
+  }).join("");
+  $("eng-simple").querySelectorAll("[id^=sim-]").forEach((el) => {
+    const s = engSimple[Number(el.id.slice(4))];
+    const read = () => { engSimpleDraft[s.key] = s.kind === "checkbox" ? el.checked : el.value.trim(); };
+    el.addEventListener("input", read);
+    el.addEventListener("change", read);
+  });
 }
 function engParse(o, s) {
   s = (s == null ? "" : String(s)).trim();
@@ -536,6 +576,7 @@ function engInput(o, i) {
     `value="${esc(cur)}" placeholder="default" autocomplete="off">`;
 }
 function renderEngine() {
+  renderSimple();
   const q = $("eng-search").value.trim().toLowerCase(), ab = $("eng-ab").checked;
   const parts = [];
   let shown = 0, group = null;
@@ -567,6 +608,11 @@ $("eng-search").addEventListener("input", renderEngine);
 $("eng-ab").addEventListener("change", renderEngine);
 $("eng-save").addEventListener("click", async () => {
   const set = {};
+  engSimple.forEach((s) => {                                  // the Simple rows join the same save
+    const v = s.key in engSimpleDraft ? engSimpleDraft[s.key] : s.value;
+    const norm = simpleNorm(s, v), old = simpleNorm(s, s.value);
+    if (JSON.stringify(norm) !== JSON.stringify(old)) set[s.key] = norm;
+  });
   engOpts.forEach((o) => {                                   // drafts win, and edited rows count even when filtered out
     const v = o.key in engDraft ? engDraft[o.key] : o.value;
     const norm = engNorm(o, v), old = engNorm(o, o.value);
@@ -578,12 +624,26 @@ $("eng-save").addEventListener("click", async () => {
     const b = await r.json();
     if (!r.ok) throw new Error((b.error || {}).message || `HTTP ${r.status}`);
     engDraft = {};
+    engSimpleDraft = {};
     $("eng-msg").textContent = b.changed.length
       ? `Saved (${b.changed.join(", ")}); the earlier file is ${b.file}.bak. Start the model again to use it.` : "Nothing changed.";
     if (b.changed.some((k) => k.startsWith("env.") || k.startsWith("arg"))) $("eng-restart-bar").hidden = false;
     loadEngine();
   } catch (e) {
     toast("error", "Not saved", String(e.message || e), 6000);
+  }
+});
+$("eng-undo").addEventListener("click", async () => {         // {"restore": true}: the .bak the last save kept
+  try {
+    const r = await fetch("config", {method: "POST", headers: headers(true), body: JSON.stringify({restore: true})});
+    const b = await r.json();
+    if (!r.ok) throw new Error((b.error || {}).message || `HTTP ${r.status}`);
+    engDraft = {};
+    engSimpleDraft = {};
+    $("eng-msg").textContent = `The earlier config (${b.restored}) is back; start the model again to use it.`;
+    loadEngine();
+  } catch (e) {
+    toast("error", "Nothing restored", String(e.message || e), 6000);
   }
 });
 $("eng-restart").addEventListener("click", async () => {

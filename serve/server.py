@@ -2628,6 +2628,12 @@ def parallel_args(cfg: dict, args: list[str]) -> list[str]:
     return ["--batch", str(n)]
 
 
+def _no_json_number(name: str):
+    """json.loads' leniency is not JSON: NaN/Infinity/-Infinity in a POST /config body are refused (the
+    ValueError answers a 400) - a config number must be a real number the engine can use."""
+    raise ValueError(f"not a number the config can hold: {name}")
+
+
 def profile_shape(path: str) -> tuple[int, int] | None:
     """An expert profile's (layers, experts per layer), from its header (tools/make_profile.py's format), or None
     when the file is missing, is not one or is shorter than the pairs its header promises."""
@@ -5810,30 +5816,51 @@ def make_handler(svc: Service):
 
         def _config_post(self):
             """#564: change a few documented keys of the run config - JSON from Strata's own page only, as
-            /settings (the key is checked before); every other key of the file stays as it is."""
+            /settings (the key is checked before); every other key of the file stays as it is.  A body of
+            {"restore": true} (#2509) puts back the .bak the last save kept instead of changing keys."""
             body = self._body()
             if not self._own_page("the run config can be changed"):
                 return
             if not svc.config_path:
                 self._json(404, {"error": {"message": "this server was started without a run config"}})
                 return
+            restored = ""
             try:
-                req = json.loads(body or b"{}")
-                with svc.config_lock:
-                    cfg = runconfig.load(svc.config_path)
-                    new, changed = runconfig.apply(cfg, req.get("set") if isinstance(req, dict) else None)
-                    if changed:
-                        bak = runconfig.save(svc.config_path, new)
+                req = json.loads(body or b"{}", parse_constant=_no_json_number)
+                if isinstance(req, dict) and req.get("restore") is not None:
+                    if req.get("restore") is not True or req.get("set"):
+                        raise ValueError('send {"restore": true} on its own, or {"set": {...}}')
+                    with svc.config_lock:
+                        bak = runconfig.backup_of(svc.config_path)
+                        if not bak.exists():
+                            raise ValueError("there is no earlier config to undo into: a save keeps "
+                                             "strata-<model>.json.bak")
+                        new = runconfig.load(bak)
+                        runconfig.restore(svc.config_path)
+                        restored, changed = bak.name, []
+                else:
+                    with svc.config_lock:
+                        cfg = runconfig.load(svc.config_path)
+                        new, changed = runconfig.apply(cfg, req.get("set") if isinstance(req, dict) else None)
+                        if changed:
+                            bak = runconfig.save(svc.config_path, new)
             except ValueError as e:
                 self._json(400, {"error": {"type": "invalid_request_error", "message": str(e)}})
                 return
             except OSError as e:
-                self._json(500, {"error": {"type": "server_error", "message": f"the run config cannot be written: {e}"}})
+                # a locked file (Windows WinError 5: the engine or an editor holds it): save() left no .tmp
+                self._json(500, {"error": {"type": "server_error", "message": f"the run config could not be "
+                                                                            f"written: {e} - the current "
+                                                                            f"config is intact"}})
                 return
-            if changed:
+            if restored:
+                print(f"[strata] the Settings view undid its last save: {Path(svc.config_path).name} is the "
+                      f"earlier file again ({restored}); used from the next start", flush=True)
+            elif changed:
                 print(f"[strata] the Settings view changed {', '.join(changed)} in {Path(svc.config_path).name} "
                       f"(the earlier file: {bak.name}); used from the next start", flush=True)
-            self._json(200, {**runconfig.view(new, svc.config_path), "changed": changed})
+            self._json(200, {**runconfig.view(new, svc.config_path), "changed": changed,
+                             **({"restored": restored} if restored else {})})
         def _foreign_origin(self) -> bool:
             """A web page of another origin sent this.  The Origin must be this server's own address (host and port),
             or an origin the config trusts (trusted_origins: the web app behind a reverse proxy or tunnel); no Origin

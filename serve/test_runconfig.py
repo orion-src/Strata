@@ -9,10 +9,12 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import tempfile
 import threading
 import time
 import unittest
+import unittest.mock
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -79,6 +81,64 @@ class Apply(unittest.TestCase):
         self.assertNotIn("api_key", got)
         self.assertNotIn("mcp_servers", got)
 
+    def test_infinity_and_nan_are_a_value_error_not_a_crash(self):
+        # json.loads lets NaN/Infinity/1e400 through; _number used to raise OverflowError on int(inf), which
+        # killed the handler thread with no HTTP answer.  Every one of them is now the normal ValueError.
+        for key in ("idle_unload_s", "reasoning_budget_tokens", "vram_reserve_mib", "sampling.temperature"):
+            for v in (float("inf"), float("-inf"), float("nan")):
+                with self.subTest(key=key, v=v), self.assertRaises(ValueError):
+                    runconfig.check(key, v, CFG)
+
+    def test_simple_settings_round_trip(self):
+        # the Engine tab's Simple settings: every listed key is one check() already validates, and view()
+        # carries the labels/controls/values the page renders.
+        v = runconfig.view({**CFG, "parallel": 4, "args": CFG["args"] + ["--spec", "6"]}, "x/strata-q2_0.json")
+        got = {s["key"]: s for s in v["simple"]}
+        self.assertEqual(got["parallel"]["value"], 4)
+        self.assertEqual(got["arg.--spec"]["value"], 6)
+        self.assertEqual(got["parallel"]["choices"], [1, 2, 4, 8])
+        for s in v["simple"]:
+            self.assertTrue(s["label"] and s["desc"], s["key"])
+            self.assertIn(s["kind"], ("select", "number", "checkbox"), s["key"])
+            runconfig.check(s["key"], s["value"], CFG)          # no key outside the existing allowlist
+        new, changed = runconfig.apply(CFG, {"parallel": 4, "arg.--spec": 6, "idle_unload_s": 600,
+                                            "fit_max_tokens": True, "open_browser": False})
+        self.assertEqual(new["parallel"], 4)
+        self.assertEqual(new["args"][-2:], ["--spec", "6"])
+        self.assertIs(new["fit_max_tokens"], True)
+        self.assertIs(new["open_browser"], False)
+        self.assertEqual(len(changed), 5)
+        back, _ = runconfig.apply(new, {"parallel": None, "arg.--spec": None, "idle_unload_s": None,
+                                        "fit_max_tokens": None, "open_browser": None})
+        self.assertNotIn("parallel", back)
+        self.assertNotIn("--spec", back["args"])
+        for changes in ({"parallel": "four"}, {"parallel": -1}, {"parallel": True}, {"parallel": 1.5}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                runconfig.apply(CFG, changes)
+
+    def test_the_three_plain_arg_knobs_round_trip(self):
+        # conversation-cache / pcie-frac / ple-io: not in the generated catalog (not GPU switches), stored
+        # in "args" through the ("arg"|"argnum"|"argchoice", flag) EDITABLE kind, like vram_reserve_mib.
+        new, changed = runconfig.apply(CFG, {"conversation_cache_mib": 8192, "pcie_frac": 0.5, "ple_io": "ram"})
+        a = new["args"]
+        self.assertEqual(a[a.index("--conversation-cache-mib") + 1], "8192")
+        self.assertEqual(a[a.index("--pcie-frac") + 1], "0.5")
+        self.assertEqual(a[a.index("--ple-io") + 1], "ram")
+        self.assertEqual(len(changed), 3)
+        v = runconfig.view(new, "x/strata-q2_0.json")
+        got = {s["key"]: s for s in v["simple"]}
+        self.assertEqual(got["conversation_cache_mib"]["value"], 8192)
+        self.assertEqual(got["pcie_frac"]["value"], "0.5")
+        self.assertEqual(got["ple_io"]["value"], "ram")
+        self.assertEqual(got["ple_io"]["choices"], ["direct", "ram", "mmap"])
+        back, _ = runconfig.apply(new, {"conversation_cache_mib": None, "pcie_frac": None, "ple_io": None})
+        for flag in ("--conversation-cache-mib", "--pcie-frac", "--ple-io"):
+            self.assertNotIn(flag, back["args"])
+        for changes in ({"ple_io": "fast"}, {"pcie_frac": 1.5}, {"pcie_frac": 0}, {"pcie_frac": "x"},
+                        {"conversation_cache_mib": 0.5}, {"conversation_cache_mib": -1}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                runconfig.apply(CFG, changes)
+
 
 class Http(unittest.TestCase):
     def setUp(self):
@@ -141,6 +201,62 @@ class Http(unittest.TestCase):
             self.assertEqual(status, 400, (body, b))
         self.assertEqual(self.path.read_bytes(), before)                 # nothing was written
         self.assertFalse((self.path.parent / "strata-q2_0.json.bak").exists())
+
+    def test_nan_and_infinity_answer_400(self):
+        # json.loads' leniency is not JSON: NaN/Infinity/-Infinity are refused by the parse (parse_constant),
+        # and a bare 1e400 (which parses to inf) is refused by the number check - either way an honest 400
+        # arrives, the handler thread is not killed by an OverflowError.
+        before = self.path.read_bytes()
+        for body in (b'{"set": {"idle_unload_s": NaN}}', b'{"set": {"idle_unload_s": Infinity}}',
+                     b'{"set": {"idle_unload_s": -Infinity}}', b'{"set": {"reasoning_budget_tokens": 1e400}}'):
+            status, b = self.call("POST", body, {"Origin": f"http://{self.host}"})
+            self.assertEqual(status, 400, (body, b))
+            self.assertIn("error", b)
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_restore_gives_the_earlier_file_back(self):
+        # {"restore": true}: the .bak the last save kept is put back (the Engine tab's "Undo last save")
+        before = self.path.read_bytes()
+        with contextlib.redirect_stdout(io.StringIO()):
+            status, v = self.call("POST", {"set": {"fit_max_tokens": True, "idle_unload_s": 600}},
+                                  {"Origin": f"http://{self.host}"})
+        self.assertEqual(status, 200, v)
+        self.assertNotEqual(self.path.read_bytes(), before)
+        with contextlib.redirect_stdout(io.StringIO()):
+            status, v = self.call("POST", {"restore": True}, {"Origin": f"http://{self.host}"})
+        self.assertEqual(status, 200, v)
+        self.assertEqual(self.path.read_bytes(), before)        # the original bytes, exactly
+        self.assertEqual(v["restored"], "strata-q2_0.json.bak")
+        self.assertEqual(v["changed"], [])
+        status, b = self.call("POST", {"restore": True, "set": {"fit_max_tokens": True}},
+                              {"Origin": f"http://{self.host}"})
+        self.assertEqual(status, 400, b)                        # one form at a time
+
+    def test_restore_without_a_backup_is_a_clear_400(self):
+        status, b = self.call("POST", {"restore": True}, {"Origin": f"http://{self.host}"})
+        self.assertEqual(status, 400, b)
+        self.assertIn("bak", b["error"]["message"])
+        self.assertFalse((self.path.parent / "strata-q2_0.json.bak").exists())
+
+    def test_a_locked_config_leaves_no_tmp_litter(self):
+        # the save moves a .tmp over the config; when the move fails (Windows WinError 5: another process
+        # holds the file) the .tmp must not be left behind, and the answer says the current config is intact
+        before = self.path.read_bytes()
+        if os.name == "nt":
+            handle = self.path.open("rb")                       # an open handle: os.replace gets WinError 5
+            try:
+                status, b = self.call("POST", {"set": {"fit_max_tokens": True}},
+                                      {"Origin": f"http://{self.host}"})
+            finally:
+                handle.close()
+        else:
+            with unittest.mock.patch("os.replace", side_effect=PermissionError(13, "locked")):
+                status, b = self.call("POST", {"set": {"fit_max_tokens": True}},
+                                      {"Origin": f"http://{self.host}"})
+        self.assertEqual(status, 500, b)
+        self.assertIn("intact", b["error"]["message"])
+        self.assertEqual(self.path.read_bytes(), before)        # the config was not touched
+        self.assertFalse(list(self.path.parent.glob("*.tmp")))  # and no strata-*.json.tmp litter
 
     def test_the_api_key(self):
         self.svc.api_key = "secret"
@@ -328,11 +444,15 @@ class Engine(unittest.TestCase):
     def test_the_page_has_the_engine_tab(self):
         web = ROOT / "serve" / "web"
         html, js = (web / "index.html").read_text(encoding="utf-8"), (web / "app.js").read_text(encoding="utf-8")
-        for el in ("tab-btn-engine", "view-engine", "eng-list", "eng-save", "eng-search", "eng-ab", "eng-scope"):
+        for el in ("tab-btn-engine", "view-engine", "eng-list", "eng-save", "eng-search", "eng-ab", "eng-scope",
+                   "eng-simple", "eng-undo"):
             self.assertIn(f'id="{el}"', html)
+        self.assertIn("All switches (advanced)", html)              # the full catalog, collapsed under Simple
         self.assertIn('fetch("engine-options"', js)
         self.assertIn('"engine"', js)
         self.assertIn("engDraft", js)                                   # edits survive the search/experimental filter
+        self.assertIn("engSimpleDraft", js)                             # and the Simple rows keep their edits
+        self.assertIn('body: JSON.stringify({restore: true})', js)      # the Undo last save button
         css = (web / "app.css").read_text(encoding="utf-8")
         self.assertIn(".view--engine { overflow-y: auto; }", css)       # the long list scrolls, as Monitor's does
 

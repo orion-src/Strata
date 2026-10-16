@@ -921,6 +921,15 @@ print(r.choices[0].message.content)
   `strata-<model>.json.bak`, and the model uses the change from its next start. Only Strata's own page can save
   (JSON, the API key when one is set, as for the Chat settings); the network, key, MCP and program keys are not
   editable there.
+- **Engine tab: Simple settings (0.1.44, #2509).** The Engine tab leads with a Simple settings card: everyday
+  knobs in plain words - conversations at once (`"parallel"`), the guess-ahead draft window (`--spec`), VRAM left
+  free (`--vram-reserve-mib`), idle unload, the thinking cap, over-long answers, opening the browser - each with
+  one sentence saying what it does, the current value filled in, and the same Save/restart wiring as the rest.
+  The full generated catalog of GPU switches (every `env.STRATA_*` and cataloged `--flag` for this vendor) moved
+  under a collapsed "All switches (advanced)". Every key goes through the same checks as the Settings view;
+  nothing outside them is accepted. **Undo last save** puts back the `strata-<model>.json.bak` the last save kept
+  (a `{"restore": true}` to `POST /config`), so a bad change is one click from gone; the restored file is used
+  from the model's next start, as any saved change is.
 - **From other devices on your network.** The server listens on your PC only (`127.0.0.1`) unless you say otherwise:
   run setup with `START-HERE.bat --setup --host 0.0.0.0 --api-key some-long-secret` (or add `"host": "0.0.0.0"` and
   `"api_key": "..."` to `strata-<model>.json`). The server window then prints this PC's addresses

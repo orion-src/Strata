@@ -176,21 +176,28 @@
   <section class="view view--engine" id="view-engine" role="tabpanel" aria-labelledby="tab-btn-engine" hidden>
     <div class="about">
       <div class="st-card">
-        <div class="req-head"><span class="card-title">Engine switches</span><span class="muted small" id="eng-scope"></span></div>
-        <p class="muted small" id="eng-note">Speed and feature switches for this GPU, kept in the run config (env / args).
-          An empty field is the engine default. They take effect the next time the model starts.</p>
+        <div class="req-head"><span class="card-title">Simple settings</span><span class="muted small" id="eng-scope"></span></div>
+        <p class="muted small" id="eng-note">Everyday engine knobs in plain words, kept in the run config.
+          An empty field is the default. They take effect the next time the model starts.</p>
         <div class="eng-restart" id="eng-restart-bar" hidden>
           <span>The engine settings changed since it started.</span>
           <button class="st-btn st-btn--primary" id="eng-restart" type="button">Restart engine</button>
           <span class="muted small" id="eng-restart-msg" role="status"></span>
         </div>
-        <div class="eng-tools">
-          <input class="st-input" id="eng-search" type="search" placeholder="Search switches…" autocomplete="off" aria-label="Search switches">
-          <label class="eng-ab" for="eng-ab"><input type="checkbox" id="eng-ab"> experimental</label>
-          <span class="muted small" id="eng-count"></span>
-        </div>
-        <div id="eng-list" class="eng-list"></div>
+        <div id="eng-simple" class="eng-list"></div>
+        <details class="eng-advanced">
+          <summary>All switches (advanced)</summary>
+          <p class="muted small">The full generated catalog of GPU switches (env / args), for this vendor.
+            Only cataloged keys are accepted; the same Save applies.</p>
+          <div class="eng-tools">
+            <input class="st-input" id="eng-search" type="search" placeholder="Search switches…" autocomplete="off" aria-label="Search switches">
+            <label class="eng-ab" for="eng-ab"><input type="checkbox" id="eng-ab"> experimental</label>
+            <span class="muted small" id="eng-count"></span>
+          </div>
+          <div id="eng-list" class="eng-list"></div>
+        </details>
         <div class="cfg-actions"><button class="st-btn st-btn--primary" id="eng-save" type="button">Save</button>
+          <button class="st-btn" id="eng-undo" type="button">Undo last save</button>
           <span class="muted small" id="eng-msg" role="status"></span></div>
       </div>
     </div>

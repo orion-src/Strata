@@ -149,6 +149,10 @@ main { flex: 1; min-height: 0; display: flex; }
 .eng-row .st-input { height: 38px; width: 100%; }
 .eng-restart { display: flex; align-items: center; gap: var(--st-s-3); flex-wrap: wrap; margin: var(--st-s-2) 0;
   padding: var(--st-s-2) var(--st-s-3); border: 1px solid var(--st-line); border-radius: var(--st-r-2, 8px); }
+.eng-advanced { margin-top: var(--st-s-3); }
+.eng-advanced summary { font-weight: var(--st-fw-bold); font-size: var(--st-fs-sm); color: var(--st-ink-muted);
+  cursor: pointer; padding: var(--st-s-2) 0; }
+.eng-row input[type=checkbox] { width: 20px; height: 20px; justify-self: start; accent-color: var(--st-accent, currentColor); }
 .mcp-server { display: flex; flex-direction: column; gap: var(--st-s-2); padding-top: var(--st-s-3); border-top: 1px solid var(--st-line-soft); }
 .mcp-server:first-child { padding-top: 0; border-top: 0; }
 .mcp-server__head { display: flex; align-items: center; gap: var(--st-s-2); flex-wrap: wrap; font-size: var(--st-fs-sm); }
